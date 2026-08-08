@@ -24,17 +24,12 @@ export function nowIso() {
   return new Date().toISOString();
 }
 
-export function businessDaysSince(value: string | Date) {
-  const start = new Date(value);
-  const end = new Date();
-  start.setUTCHours(0, 0, 0, 0);
-  end.setUTCHours(0, 0, 0, 0);
-  let count = 0;
-  for (const cursor = new Date(start.getTime() + 86_400_000); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
-    const day = cursor.getUTCDay();
-    if (day !== 0 && day !== 6) count += 1;
-  }
-  return count;
+
+// 이벤트/감사로그의 actorName은 "사건 발생 시점의 이름" 스냅샷이므로 기록 시점에 조회해 함께 저장한다.
+export async function actorNameOf(actorId: string | null) {
+  if (!actorId) return null;
+  const actor = await getPrisma().user.findUnique({ where: { id: actorId }, select: { name: true } });
+  return actor?.name ?? null;
 }
 
 export async function writeAuditLog(
@@ -47,12 +42,11 @@ export async function writeAuditLog(
   afterData: Prisma.InputJsonValue | null,
 ) {
   const prisma = getPrisma();
-  const actor = actorId ? await prisma.user.findUnique({ where: { id: actorId }, select: { name: true } }) : null;
   return prisma.auditLog.create({
     data: {
       projectId,
       actorId,
-      actorName: actor?.name ?? null,
+      actorName: await actorNameOf(actorId),
       action,
       targetTable,
       targetId,

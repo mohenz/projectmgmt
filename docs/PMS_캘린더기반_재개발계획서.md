@@ -130,7 +130,7 @@ v2의 "듀얼 DB" 구조는 이번 결정으로 폐기한다 — 캘린더뿐 �
 | Firestore 접근 계층 | `lib/server/db.ts` | Prisma 기반으로 전면 재작성 |
 | Firestore 모델 상수 | `lib/domain/firestore-model.ts` | Prisma 모델/seed로 대체 |
 | 환경변수 | `.env.example`, `apphosting.yaml`의 `env` | `GOOGLE_CLOUD_PROJECT`, `FIRESTORE_DATABASE_ID` 제거, `DATABASE_URL`(Supabase), `AUTH_SECRET` 등 추가 |
-| 문서 배너 | `docs/FIREBASE_FIRESTORE_ARCHITECTURE.md`, `docs/SYSTEM_DESIGN.md`, `docs/PMS_개발작업계획서.md` | 상단에 "현재 기준은 본 문서(v3)" 배너로 갱신(요청 시 진행) |
+| 문서 배너 | `docs/FIREBASE_FIRESTORE_ARCHITECTURE.md`, `docs/SYSTEM_DESIGN.md`, `docs/PMS_개발작업계획서.md`, `docs/PMS_개발환경_아키텍처.md` | ✅ 완료 — 상단에 "현재 기준은 본 문서(v3)" 배너로 갱신 |
 | README | `README.md` | Firebase 관련 설명을 Supabase/Postgres 기준으로 재작성 |
 
 ---

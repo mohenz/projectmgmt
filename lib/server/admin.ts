@@ -11,11 +11,16 @@ export type GroupRow = { id: string; groupType: GroupType; code: string; label: 
 
 export async function listUsers(projectId: string, adminUserId: string, q?: string): Promise<AdminUserRow[]> {
   await assertAdmin(projectId, adminUserId);
-  const members = await getPrisma().projectMember.findMany({ where: { projectId }, include: { user: true } });
-  const rows = members.map((member) => ({ id: member.user.id, userId: member.user.userId, name: member.user.name, email: member.user.email, department: member.user.department, role: member.role, status: member.user.status, createdAt: member.user.createdAt.toISOString() }));
-  const query = q?.trim().toLocaleLowerCase("ko");
-  const filtered = query ? rows.filter((row) => row.userId.toLocaleLowerCase("ko").includes(query) || row.name.toLocaleLowerCase("ko").includes(query)) : rows;
-  return filtered.sort((a, b) => a.userId.localeCompare(b.userId));
+  const query = q?.trim();
+  const members = await getPrisma().projectMember.findMany({
+    where: {
+      projectId,
+      ...(query ? { user: { OR: [{ userId: { contains: query, mode: "insensitive" } }, { name: { contains: query, mode: "insensitive" } }] } } : {}),
+    },
+    include: { user: true },
+    orderBy: { user: { userId: "asc" } },
+  });
+  return members.map((member) => ({ id: member.user.id, userId: member.user.userId, name: member.user.name, email: member.user.email, department: member.user.department, role: member.role, status: member.user.status, createdAt: member.user.createdAt.toISOString() }));
 }
 
 const roleSchema = z.object({ role: z.enum(["ADMIN", "OPERATOR", "MEMBER"]) });

@@ -1,4 +1,4 @@
-// PMS 통합 스키마 — Firebase Firestore를 대체하는 단일 Postgres(Supabase) 스키마.
+// PMS 통합 스키마 — 단일 Postgres(Supabase) 스키마.
 // 매핑 근거: docs/PMS_캘린더기반_재개발계획서.md 3장
 
 generator client {
@@ -44,16 +44,21 @@ model User {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  memberships         ProjectMember[]
-  groupMemberships    UserGroupMap[]
-  createdItems        Item[]               @relation("ItemCreator")
-  ownedItems          Item[]               @relation("ItemOwner")
-  itemEvents          ItemEvent[]
-  assignedEvents      EventAssignee[]
-  notificationSetting NotificationSetting?
-  sentMessages        Message[]            @relation("MessageSender")
-  receivedMessages    Message[]            @relation("MessageReceiver")
-  auditLogs           AuditLog[]
+  memberships          ProjectMember[]
+  groupMemberships     UserGroupMap[]
+  createdItems         Item[]               @relation("ItemCreator")
+  ownedItems           Item[]               @relation("ItemOwner")
+  itemEvents           ItemEvent[]
+  assignedEvents       EventAssignee[]
+  createdEvents        CalendarEvent[]      @relation("CalendarEventCreator")
+  updatedEvents        CalendarEvent[]      @relation("CalendarEventUpdater")
+  createdWeeklyReports WeeklyReport[]       @relation("WeeklyReportCreator")
+  createdProgress      WeeklyProgress[]     @relation("WeeklyProgressCreator")
+  createdStaffChanges  StaffChange[]        @relation("StaffChangeCreator")
+  notificationSetting  NotificationSetting?
+  sentMessages         Message[]            @relation("MessageSender")
+  receivedMessages     Message[]            @relation("MessageReceiver")
+  auditLogs            AuditLog[]
 
   @@map("users")
 }
@@ -357,8 +362,9 @@ model WeeklyReport {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  week  Week   @relation(fields: [weekId], references: [id], onDelete: Cascade)
-  group Groups @relation(fields: [groupId], references: [id])
+  week    Week   @relation(fields: [weekId], references: [id], onDelete: Cascade)
+  group   Groups @relation(fields: [groupId], references: [id])
+  creator User   @relation("WeeklyReportCreator", fields: [createdBy], references: [id], onDelete: Restrict)
 
   @@unique([weekId, groupId])
   @@map("weekly_reports")
@@ -382,9 +388,11 @@ model WeeklyProgress {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  week  Week   @relation(fields: [weekId], references: [id], onDelete: Cascade)
-  group Groups @relation(fields: [groupId], references: [id])
+  week    Week   @relation(fields: [weekId], references: [id], onDelete: Cascade)
+  group   Groups @relation(fields: [groupId], references: [id])
+  creator User   @relation("WeeklyProgressCreator", fields: [createdBy], references: [id], onDelete: Restrict)
 
+  @@index([weekId, groupId])
   @@map("weekly_progress")
 }
 
@@ -401,8 +409,9 @@ model StaffChange {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  week  Week   @relation(fields: [weekId], references: [id], onDelete: Cascade)
-  group Groups @relation(fields: [groupId], references: [id])
+  week    Week   @relation(fields: [weekId], references: [id], onDelete: Cascade)
+  group   Groups @relation(fields: [groupId], references: [id])
+  creator User   @relation("StaffChangeCreator", fields: [createdBy], references: [id], onDelete: Restrict)
 
   @@unique([weekId, groupId, changeType])
   @@map("staff_changes")
@@ -453,6 +462,8 @@ model CalendarEvent {
 
   project     Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
   group       Groups?           @relation(fields: [groupId], references: [id])
+  creator     User              @relation("CalendarEventCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater     User?             @relation("CalendarEventUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
   exceptions  EventException[]
   assignees   EventAssignee[]
   groupTags   EventGroupTag[]

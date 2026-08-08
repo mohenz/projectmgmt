@@ -1,6 +1,7 @@
 # PMS 개발환경 아키텍처
 
-> **보관 문서:** 이 문서는 이전 Vercel/Supabase 검토안입니다. 현재 기준은 `FIREBASE_FIRESTORE_ARCHITECTURE.md`입니다.
+> **보관 문서:** 이 문서는 Firebase 전환 이전의 Vercel/Supabase 검토안입니다.
+> 현재 구현 기준은 `docs/PMS_캘린더기반_재개발계획서.md`입니다 — 인프라는 Vercel + Supabase로 되돌아왔지만 스택 세부 사항(ORM=Prisma, 인증=Auth.js)이 다릅니다.
 
 > 프로젝트: EPMS 프로젝트관리 시스템(PMS)  
 > 문서 버전: v1.0  

@@ -28,12 +28,46 @@ function inRange(date: string, from: string, to: string) { return date >= from &
 function parseCompositeId(id: string): { masterId: string; occurrenceDate: string | null } { const [masterId, occurrenceDate] = id.split("::"); return { masterId, occurrenceDate: occurrenceDate ?? null }; }
 type OverrideData = { title?: string; description?: string; eventType?: string; startAt?: string; endAt?: string; allDay?: boolean; groupId?: string | null; location?: string; priority?: "HIGH" | "MEDIUM" | "LOW"; isMilestone?: boolean };
 
-export async function listCalendarEvents(projectId: string, from: string, to: string) {
+const isPriority = (value?: string): value is "HIGH" | "MEDIUM" | "LOW" => value === "HIGH" || value === "MEDIUM" || value === "LOW";
+const like = (query: string) => ({ contains: query, mode: "insensitive" }) as const;
+
+export async function listCalendarEvents(projectId: string, from: string, to: string, filters: CalendarSearchFilters = {}) {
   const prisma = getPrisma();
+  const rangeFrom = new Date(`${from}T00:00:00.000Z`), rangeTo = new Date(`${to}T23:59:59.999Z`);
+  // KST 변환(parts) 때문에 UTC 경계에서 하루가 밀릴 수 있어 타임스탬프 조회는 ±1일 여유를 둔다.
+  const paddedFrom = new Date(rangeFrom.getTime() - 86_400_000), paddedTo = new Date(rangeTo.getTime() + 86_400_000);
+  const dateTo = new Date(`${to}T00:00:00.000Z`);
+  const query = filters.q?.trim();
+  const priority = isPriority(filters.priority) ? filters.priority : undefined;
+  const { groupId, assigneeId } = filters;
+
+  // 반복 일정은 회차별 예외(override)로 제목·우선순위·그룹이 달라질 수 있어 DB에서 좁히지 않고 전개 후 걸러낸다.
+  const eventAnd: Prisma.CalendarEventWhereInput[] = [{ startAt: { lte: paddedTo } }, { endAt: { gte: paddedFrom } }];
+  if (query) eventAnd.push({ OR: [{ title: like(query) }, { description: like(query) }, { location: like(query) }] });
+  if (priority) eventAnd.push({ priority });
+  if (groupId) eventAnd.push({ OR: [{ groupId }, { groupTags: { some: { groupId } } }] });
+  if (assigneeId) eventAnd.push({ assignees: { some: { userId: assigneeId } } });
+
+  // 주간실적·이슈 파생 일정은 담당자가 없고 우선순위가 고정(실적 MEDIUM/LOW, 이슈 LOW)이라 매칭 불가능하면 조회 자체를 생략한다.
+  const progressAnd: Prisma.WeeklyProgressWhereInput[] = [{ OR: [{ planTargetDate: { gte: rangeFrom, lte: dateTo } }, { nextTargetDate: { gte: rangeFrom, lte: dateTo } }] }];
+  if (query) progressAnd.push({ OR: [{ taskName: like(query) }, { planDetail: like(query) }, { nextPlan: like(query) }] });
+  if (groupId) progressAnd.push({ groupId });
+  const skipProgress = Boolean(assigneeId) || priority === "HIGH";
+  const skipItems = Boolean(assigneeId) || (priority !== undefined && priority !== "LOW");
+
   const [events, progress, items, options] = await Promise.all([
-    prisma.calendarEvent.findMany({ where: { projectId }, include: { assignees: { include: { user: true } }, groupTags: { include: { group: true } } } }),
-    prisma.weeklyProgress.findMany({ where: { week: { projectId } } }),
-    prisma.item.findMany({ where: { projectId, archivedAt: null } }),
+    prisma.calendarEvent.findMany({
+      where: { projectId, OR: [{ recurrenceRule: { not: null } }, { AND: eventAnd }] },
+      include: { assignees: { include: { user: true } }, groupTags: { include: { group: true } } },
+    }),
+    skipProgress ? [] : prisma.weeklyProgress.findMany({ where: { week: { projectId }, AND: progressAnd } }),
+    skipItems ? [] : prisma.item.findMany({
+      where: {
+        projectId, archivedAt: null, createdAt: { gte: paddedFrom, lte: paddedTo },
+        ...(groupId ? { groupId } : {}),
+        ...(query ? { OR: [{ title: like(query) }, { description: like(query) }] } : {}),
+      },
+    }),
     getCodeOptions(projectId),
   ]);
   const labels = new Map(options.tracks.map((code) => [code.id, code.label]));
@@ -44,8 +78,6 @@ export async function listCalendarEvents(projectId: string, from: string, to: st
   const exceptionMap = new Map(exceptions.map((exception) => [`${exception.eventId}:${exception.exceptionDate.toISOString().slice(0, 10)}`, exception]));
 
   const rows: CalendarEvent[] = [];
-  const rangeFrom = new Date(`${from}T00:00:00.000Z`), rangeTo = new Date(`${to}T23:59:59.999Z`);
-  const paddedFrom = new Date(rangeFrom.getTime() - 86_400_000), paddedTo = new Date(rangeTo.getTime() + 86_400_000);
   for (const event of events) {
     const areaLabel = event.groupId ? labels.get(event.groupId) ?? null : null;
     if (event.recurrenceRule) {
@@ -176,7 +208,8 @@ export async function deleteCalendarEvent(projectId: string, id: string, userId:
 export async function searchCalendarEvents(projectId: string, filters: CalendarSearchFilters): Promise<CalendarEvent[]> {
   const from = filters.from ?? new Date(Date.now() - 180 * 86_400_000).toISOString().slice(0, 10);
   const to = filters.to ?? new Date(Date.now() + 365 * 86_400_000).toISOString().slice(0, 10);
-  const events = await listCalendarEvents(projectId, from, to);
+  const events = await listCalendarEvents(projectId, from, to, filters);
+  // DB에서 좁히지 못하는 반복 일정 회차(예외 override 적용 후 값)를 최종적으로 걸러낸다.
   const query = filters.q?.trim().toLocaleLowerCase("ko");
   return events.filter((event) =>
     (!query || `${event.title} ${event.description} ${event.location}`.toLocaleLowerCase("ko").includes(query)) &&

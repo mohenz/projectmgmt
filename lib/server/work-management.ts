@@ -13,9 +13,12 @@ export type ActivityLog = { id: string; action: string; actorName: string | null
 
 const dateStr = (value: Date | null) => (value ? value.toISOString().slice(0, 10) : null);
 
+const toProjectWeek = (week: { id: string; weekKey: string; label: string; startDate: Date; endDate: Date; status: "open" | "closed" }): ProjectWeek =>
+  ({ id: week.id, weekKey: week.weekKey, label: week.label, startDate: dateStr(week.startDate)!, endDate: dateStr(week.endDate)!, status: week.status });
+
 export async function listProjectWeeks(projectId: string): Promise<ProjectWeek[]> {
-  const weeks = await getPrisma().week.findMany({ where: { projectId } });
-  return weeks.map((week) => ({ id: week.id, weekKey: week.weekKey, label: week.label, startDate: dateStr(week.startDate)!, endDate: dateStr(week.endDate)!, status: week.status })).sort((a, b) => b.startDate.localeCompare(a.startDate));
+  const weeks = await getPrisma().week.findMany({ where: { projectId }, orderBy: { startDate: "desc" } });
+  return weeks.map(toProjectWeek);
 }
 export async function getWorkOptions(projectId: string) {
   const [weeks, codes] = await Promise.all([listProjectWeeks(projectId), getCodeOptions(projectId)]);
@@ -59,15 +62,14 @@ export async function listAuditTables(projectId: string): Promise<string[]> {
   return rows.map((row) => row.targetTable).filter((table): table is string => Boolean(table)).sort();
 }
 
-function lookupMaps(weeks: ProjectWeek[], areas: CommonCode[]) { return { week: new Map(weeks.map((row) => [row.id, row])), area: new Map(areas.map((row) => [row.id, row])) }; }
+// 주차/그룹 라벨은 관계 include로 함께 읽고, 필터·정렬은 Prisma가 처리한다(전체 로드 후 JS 필터 금지).
+const weekScope = (projectId: string, weekId?: string) => ({ week: { projectId }, ...(weekId ? { weekId } : {}) });
+const weekGroupInclude = { week: true, group: true } as const;
+const weekGroupOrder = [{ week: { startDate: "desc" } }, { group: { sortOrder: "asc" } }] as const;
 
 export async function listWeeklyReports(projectId: string, weekId?: string): Promise<WeeklyReport[]> {
-  const prisma = getPrisma();
-  const [records, weeks, options] = await Promise.all([prisma.weeklyReport.findMany({ where: { week: { projectId } } }), listProjectWeeks(projectId), getCodeOptions(projectId)]);
-  const maps = lookupMaps(weeks, options.tracks as CommonCode[]);
-  return records.filter((row) => !weekId || row.weekId === weekId)
-    .map((row) => ({ id: row.id, weekId: row.weekId, weekLabel: maps.week.get(row.weekId)?.label ?? "-", areaCodeId: row.groupId, areaLabel: maps.area.get(row.groupId)?.label ?? "-", achievements: row.achievements, nextPlan: row.nextPlan, issues: row.issues, decisions: row.decisions, notes: row.notes, version: row.version }))
-    .sort((a, b) => (maps.week.get(b.weekId)?.startDate ?? "").localeCompare(maps.week.get(a.weekId)?.startDate ?? "") || (maps.area.get(a.areaCodeId)?.sortOrder ?? 0) - (maps.area.get(b.areaCodeId)?.sortOrder ?? 0));
+  const records = await getPrisma().weeklyReport.findMany({ where: weekScope(projectId, weekId), include: weekGroupInclude, orderBy: [...weekGroupOrder] });
+  return records.map((row) => ({ id: row.id, weekId: row.weekId, weekLabel: row.week.label, areaCodeId: row.groupId, areaLabel: row.group.label, achievements: row.achievements, nextPlan: row.nextPlan, issues: row.issues, decisions: row.decisions, notes: row.notes, version: row.version }));
 }
 const reportSchema = z.object({ weekId: z.string().uuid(), areaCodeId: z.string().uuid(), achievements: z.string().max(10000), nextPlan: z.string().max(10000), issues: z.string().max(10000), decisions: z.string().max(10000), notes: z.string().max(10000) });
 export async function saveWeeklyReport(projectId: string, userId: string, input: unknown) {
@@ -82,12 +84,12 @@ export async function saveWeeklyReport(projectId: string, userId: string, input:
 }
 
 export async function listWeeklyProgress(projectId: string, weekId?: string): Promise<ProgressRow[]> {
-  const prisma = getPrisma();
-  const [records, weeks, options] = await Promise.all([prisma.weeklyProgress.findMany({ where: { week: { projectId } } }), listProjectWeeks(projectId), getCodeOptions(projectId)]);
-  const maps = lookupMaps(weeks, options.tracks as CommonCode[]), today = new Date().toISOString().slice(0, 10);
-  return records.filter((row) => !weekId || row.weekId === weekId)
-    .map((row) => { const planTargetDate = dateStr(row.planTargetDate); return { id: row.id, weekId: row.weekId, weekLabel: maps.week.get(row.weekId)?.label ?? "-", areaCodeId: row.groupId, areaLabel: maps.area.get(row.groupId)?.label ?? "-", taskName: row.taskName, planDetail: row.planDetail, planTargetDate, actualDetail: row.actualDetail, actualDate: dateStr(row.actualDate), progress: row.progress, nextPlan: row.nextPlan, nextTargetDate: dateStr(row.nextTargetDate), notes: row.notes, version: row.version, delayed: row.progress < 100 && Boolean(planTargetDate && planTargetDate < today) }; })
-    .sort((a, b) => (maps.week.get(b.weekId)?.startDate ?? "").localeCompare(maps.week.get(a.weekId)?.startDate ?? "") || (maps.area.get(a.areaCodeId)?.sortOrder ?? 0) - (maps.area.get(b.areaCodeId)?.sortOrder ?? 0));
+  const records = await getPrisma().weeklyProgress.findMany({ where: weekScope(projectId, weekId), include: weekGroupInclude, orderBy: [...weekGroupOrder] });
+  const today = new Date().toISOString().slice(0, 10);
+  return records.map((row) => {
+    const planTargetDate = dateStr(row.planTargetDate);
+    return { id: row.id, weekId: row.weekId, weekLabel: row.week.label, areaCodeId: row.groupId, areaLabel: row.group.label, taskName: row.taskName, planDetail: row.planDetail, planTargetDate, actualDetail: row.actualDetail, actualDate: dateStr(row.actualDate), progress: row.progress, nextPlan: row.nextPlan, nextTargetDate: dateStr(row.nextTargetDate), notes: row.notes, version: row.version, delayed: row.progress < 100 && Boolean(planTargetDate && planTargetDate < today) };
+  });
 }
 const progressSchema = z.object({ weekId: z.string().uuid(), areaCodeId: z.string().uuid(), taskName: z.string().trim().min(1).max(200), planDetail: z.string().max(10000), planTargetDate: z.string().date().nullable(), actualDetail: z.string().max(10000), actualDate: z.string().date().nullable(), progress: z.number().int().min(0).max(100), nextPlan: z.string().max(10000), nextTargetDate: z.string().date().nullable(), notes: z.string().max(10000) });
 export async function createProgress(projectId: string, userId: string, input: unknown) {
@@ -107,12 +109,8 @@ export async function updateProgress(projectId: string, id: string, input: unkno
 }
 
 export async function listStaffChanges(projectId: string, weekId?: string): Promise<StaffChange[]> {
-  const prisma = getPrisma();
-  const [records, weeks, options] = await Promise.all([prisma.staffChange.findMany({ where: { week: { projectId } } }), listProjectWeeks(projectId), getCodeOptions(projectId)]);
-  const maps = lookupMaps(weeks, options.tracks as CommonCode[]);
-  return records.filter((row) => !weekId || row.weekId === weekId)
-    .map((row) => ({ id: row.id, weekId: row.weekId, weekLabel: maps.week.get(row.weekId)?.label ?? "-", areaCodeId: row.groupId, areaLabel: maps.area.get(row.groupId)?.label ?? "-", changeType: row.changeType, currentCount: row.currentCount, nextCount: row.nextCount, notes: row.notes, version: row.version }))
-    .sort((a, b) => (maps.week.get(b.weekId)?.startDate ?? "").localeCompare(maps.week.get(a.weekId)?.startDate ?? "") || (maps.area.get(a.areaCodeId)?.sortOrder ?? 0) - (maps.area.get(b.areaCodeId)?.sortOrder ?? 0) || a.changeType.localeCompare(b.changeType));
+  const records = await getPrisma().staffChange.findMany({ where: weekScope(projectId, weekId), include: weekGroupInclude, orderBy: [...weekGroupOrder, { changeType: "asc" }] });
+  return records.map((row) => ({ id: row.id, weekId: row.weekId, weekLabel: row.week.label, areaCodeId: row.groupId, areaLabel: row.group.label, changeType: row.changeType, currentCount: row.currentCount, nextCount: row.nextCount, notes: row.notes, version: row.version }));
 }
 const staffSchema = z.object({ weekId: z.string().uuid(), areaCodeId: z.string().uuid(), changeType: z.enum(["join", "leave"]), currentCount: z.number().int().min(0), nextCount: z.number().int().min(0), notes: z.string().max(10000) });
 export async function saveStaffChange(projectId: string, userId: string, input: unknown) {
@@ -128,18 +126,21 @@ export async function saveStaffChange(projectId: string, userId: string, input: 
 
 export async function getPortfolioDashboard(projectId: string) {
   const prisma = getPrisma();
-  const [weeks, reportCount, progress, staff, items] = await Promise.all([
-    listProjectWeeks(projectId),
-    prisma.weeklyReport.count({ where: { week: { projectId } } }),
-    listWeeklyProgress(projectId),
-    prisma.staffChange.findMany({ where: { week: { projectId } } }),
-    prisma.item.findMany({ where: { projectId, archivedAt: null }, select: { status: true } }),
+  const scope = { week: { projectId } };
+  const today = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`);
+  const [currentWeek, reportCount, progressAvg, delayedCount, staffTotals, openIssues] = await Promise.all([
+    prisma.week.findFirst({ where: { projectId }, orderBy: { startDate: "desc" } }),
+    prisma.weeklyReport.count({ where: scope }),
+    prisma.weeklyProgress.aggregate({ where: scope, _avg: { progress: true } }),
+    prisma.weeklyProgress.count({ where: { ...scope, progress: { lt: 100 }, planTargetDate: { lt: today } } }),
+    prisma.staffChange.groupBy({ by: ["changeType"], where: scope, _sum: { currentCount: true, nextCount: true } }),
+    prisma.item.count({ where: { projectId, archivedAt: null, status: { in: ["registered", "in_progress"] } } }),
   ]);
-  const average = progress.length ? Math.round((progress.reduce((sum, row) => sum + row.progress, 0) / progress.length) * 10) / 10 : 0;
+  const signedSum = (field: "currentCount" | "nextCount") =>
+    staffTotals.reduce((sum, row) => sum + (row.changeType === "join" ? 1 : -1) * (row._sum[field] ?? 0), 0);
   return {
-    currentWeek: weeks[0] ?? null, reportCount, averageProgress: average, delayedCount: progress.filter((row) => row.delayed).length,
-    currentStaff: staff.reduce((sum, row) => sum + (row.changeType === "join" ? row.currentCount : -row.currentCount), 0),
-    nextStaff: staff.reduce((sum, row) => sum + (row.changeType === "join" ? row.nextCount : -row.nextCount), 0),
-    openIssues: items.filter((row) => ["registered", "in_progress"].includes(row.status)).length,
+    currentWeek: currentWeek ? toProjectWeek(currentWeek) : null, reportCount,
+    averageProgress: Math.round((progressAvg._avg.progress ?? 0) * 10) / 10, delayedCount,
+    currentStaff: signedSum("currentCount"), nextStaff: signedSum("nextCount"), openIssues,
   };
 }
